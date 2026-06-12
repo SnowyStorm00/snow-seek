@@ -3,6 +3,29 @@ const path = require('path');
 const fs = require('fs');
 const os = require('os');
 const { exec } = require('child_process');
+const { autoUpdater } = require('electron-updater');
+
+// Configure auto-updater logging
+autoUpdater.logger = console;
+autoUpdater.on('checking-for-update', () => {
+  console.log('Auto-updater: Checking for update...');
+});
+autoUpdater.on('update-available', (info) => {
+  console.log('Auto-updater: Update available.');
+});
+autoUpdater.on('update-not-available', (info) => {
+  console.log('Auto-updater: Update not available.');
+});
+autoUpdater.on('error', (err) => {
+  console.error('Auto-updater: Error in auto-updater.', err);
+});
+autoUpdater.on('download-progress', (progressObj) => {
+  console.log(`Auto-updater: Download progress: ${progressObj.percent.toFixed(1)}%`);
+});
+autoUpdater.on('update-downloaded', (info) => {
+  console.log('Auto-updater: Update downloaded, will install on restart.');
+});
+
 
 let mainWindow;
 let tray;
@@ -507,6 +530,9 @@ app.whenReady().then(() => {
   updateGlobalShortcut();
 
   setTimeout(startIndexing, 1000);
+
+  // Trigger auto-update check on startup
+  autoUpdater.checkForUpdatesAndNotify();
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {
