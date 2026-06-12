@@ -4,13 +4,13 @@ import {
   Calculator, Activity, FileText, FileCode2, Image, 
   Music, Video, BookOpen, AlertCircle, Play, ChevronRight,
   Settings, X, Plus, Trash2, Copy, ArrowLeft, RotateCcw,
-  Sun, Moon, ChevronDown, Globe
+  Sun, Moon, ChevronDown, Globe, Check, Shield, Clipboard
 } from 'lucide-react';
 
 const IconMap = {
   Search, Sparkles, Cpu, File, Folder, Terminal, 
   Calculator, Activity, FileText, FileCode: FileCode2, 
-  Image, Music, Video, BookOpen, Settings, Globe
+  Image, Music, Video, BookOpen, Settings, Globe, Clipboard
 };
 
 // ResultIcon component queries native shell icons asynchronously or displays local thumbnails
@@ -54,6 +54,15 @@ function ResultIcon({ item }) {
 
   const FallbackIcon = IconMap[item.icon] || File;
   return <FallbackIcon size={18} />;
+}
+
+// ToastIcon component for unique feedback overlay
+function ToastIcon({ type }) {
+  if (type === 'copy') return <Copy size={13} />;
+  if (type === 'folder') return <Folder size={13} />;
+  if (type === 'admin') return <Shield size={13} />;
+  if (type === 'error') return <AlertCircle size={13} />;
+  return <Check size={13} />;
 }
 
 // Custom Select component for styled dropdowns
@@ -133,8 +142,60 @@ export default function App() {
   const [calcResult, setCalcResult] = useState('0');
   const [calcHistory, setCalcHistory] = useState([]);
   
+  const [toast, setToast] = useState(null); // { message, type }
+  const [clipHistory, setClipHistory] = useState([]);
+
+  // Relative time formatter helper
+  const formatRelativeTime = (timestamp) => {
+    const diff = Date.now() - timestamp;
+    if (diff < 2000) return 'Just now';
+    const secs = Math.floor(diff / 1000);
+    if (secs < 60) return `${secs}s ago`;
+    const mins = Math.floor(secs / 60);
+    if (mins < 60) return `${mins}m ago`;
+    const hours = Math.floor(mins / 60);
+    if (hours < 24) return `${hours}h ago`;
+    return new Date(timestamp).toLocaleDateString();
+  };
+
+  // Load and poll clipboard history
+  useEffect(() => {
+    if (activeUtility !== 'clip') return;
+    
+    const fetchHistory = async () => {
+      if (window.api && window.api.getClipboardHistory) {
+        const history = await window.api.getClipboardHistory();
+        setClipHistory(history);
+      }
+    };
+
+    fetchHistory();
+    const interval = setInterval(fetchHistory, 1000);
+    return () => clearInterval(interval);
+  }, [activeUtility]);
+  const toastTimeoutRef = useRef(null);
+
+  const showToast = (message, type = 'success') => {
+    if (toastTimeoutRef.current) {
+      clearTimeout(toastTimeoutRef.current);
+    }
+    setToast({ message, type });
+    toastTimeoutRef.current = setTimeout(() => {
+      setToast(null);
+    }, 2500);
+  };
+
+  useEffect(() => {
+    return () => {
+      if (toastTimeoutRef.current) {
+        clearTimeout(toastTimeoutRef.current);
+      }
+    };
+  }, []);
+  
   const inputRef = useRef(null);
   const resultsContainerRef = useRef(null);
+  const isKeyboardNav = useRef(false);
 
   // Load Settings and apply Theme on load
   useEffect(() => {
@@ -302,7 +363,12 @@ export default function App() {
       setCalcExpression('');
       setCalcResult('0');
     } else if (key === 'Back') {
-      setCalcExpression(prev => prev.slice(0, -1));
+      if (calcExpression === '') {
+        setActiveUtility(null);
+        if (inputRef.current) inputRef.current.focus();
+      } else {
+        setCalcExpression(prev => prev.slice(0, -1));
+      }
     } else if (key === '=') {
       const result = evaluateCalc(calcExpression);
       setCalcResult(result);
@@ -322,6 +388,36 @@ export default function App() {
   };
 
   // Handle launches
+  const handleCopyClipItem = async (item) => {
+    if (window.api && window.api.writeToClipboard) {
+      const success = await window.api.writeToClipboard(item.content, item.type);
+      if (success) {
+        showToast(`Copied item back to clipboard!`, 'success');
+        if (window.api && window.api.hideWindow) {
+          window.api.hideWindow();
+        }
+      } else {
+        showToast(`Failed to copy item`, 'error');
+      }
+    }
+  };
+
+  const handleDeleteClipItem = async (item) => {
+    if (window.api && window.api.deleteClipboardItem) {
+      await window.api.deleteClipboardItem(item.id);
+      setClipHistory(prev => prev.filter(i => i.id !== item.id));
+      showToast(`Deleted clipboard item`, 'success');
+    }
+  };
+
+  const handleClearClipHistory = async () => {
+    if (window.api && window.api.clearClipboardHistory) {
+      await window.api.clearClipboardHistory();
+      setClipHistory([]);
+      showToast(`Cleared clipboard history`, 'success');
+    }
+  };
+
   const handleLaunch = async (item) => {
     if (!item) return;
 
@@ -334,6 +430,9 @@ export default function App() {
         setQuery('');
       } else if (item.path === 'utility://calculator') {
         setActiveUtility('calculator');
+        setQuery('');
+      } else if (item.path === 'utility://clip') {
+        setActiveUtility('clip');
         setQuery('');
       } else if (item.path === 'utility://settings') {
         setActiveUtility('settings');
@@ -351,7 +450,56 @@ export default function App() {
   };
 
   // Keyboard navigation & inputs
+  const filteredClipHistory = clipHistory.filter(item => {
+    if (!query) return true;
+    const q = query.toLowerCase().trim();
+    if (q === 'image' || q === 'img') return item.type === 'image';
+    if (q === 'code' || q === 'snippet') return item.type === 'code';
+    if (q === 'text') return item.type === 'text';
+    if (item.type === 'image') return false;
+    return item.content.toLowerCase().includes(q);
+  });
+
+  // Clamp selection index for clipboard list on search query change
+  useEffect(() => {
+    if (activeUtility === 'clip') {
+      setSelectedIndex(prev => {
+        const max = Math.max(0, filteredClipHistory.length - 1);
+        return Math.min(prev, max);
+      });
+    }
+  }, [query, clipHistory, activeUtility]);
+
   const handleKeyDown = (e) => {
+    // If Clipboard Monitor is active, handle lists navigation
+    if (activeUtility === 'clip') {
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        setSelectedIndex(prev => Math.min(prev + 1, filteredClipHistory.length - 1));
+      } else if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        setSelectedIndex(prev => Math.max(prev - 1, 0));
+      } else if (e.key === 'Enter') {
+        e.preventDefault();
+        const selectedItem = filteredClipHistory[selectedIndex];
+        if (selectedItem) {
+          handleCopyClipItem(selectedItem);
+        }
+      } else if (e.key === 'Delete') {
+        e.preventDefault();
+        const selectedItem = filteredClipHistory[selectedIndex];
+        if (selectedItem) {
+          handleDeleteClipItem(selectedItem);
+        }
+      } else if (e.key === 'Escape') {
+        e.preventDefault();
+        setActiveUtility(null);
+        setQuery('');
+        if (inputRef.current) inputRef.current.focus();
+      }
+      return;
+    }
+
     // If Calculator is focused, feed characters to calculator
     if (activeUtility === 'calculator') {
       const calcKeys = '0123456789+-*/.()';
@@ -376,16 +524,77 @@ export default function App() {
     }
 
     // Default keyboard navigation for other screens
+    const isGridMode = !query && results.every(r => r.type === 'utility');
+    const GRID_COLS = 3;
+
     if (e.key === 'ArrowDown') {
       e.preventDefault();
-      setSelectedIndex((prev) => Math.min(prev + 1, results.length - 1));
+      isKeyboardNav.current = true;
+      if (isGridMode) {
+        setSelectedIndex((prev) => Math.min(prev + GRID_COLS, results.length - 1));
+      } else {
+        setSelectedIndex((prev) => Math.min(prev + 1, results.length - 1));
+      }
     } else if (e.key === 'ArrowUp') {
       e.preventDefault();
+      isKeyboardNav.current = true;
+      if (isGridMode) {
+        setSelectedIndex((prev) => Math.max(prev - GRID_COLS, 0));
+      } else {
+        setSelectedIndex((prev) => Math.max(prev - 1, 0));
+      }
+    } else if (e.key === 'ArrowRight' && isGridMode) {
+      e.preventDefault();
+      isKeyboardNav.current = true;
+      setSelectedIndex((prev) => Math.min(prev + 1, results.length - 1));
+    } else if (e.key === 'ArrowLeft' && isGridMode) {
+      e.preventDefault();
+      isKeyboardNav.current = true;
       setSelectedIndex((prev) => Math.max(prev - 1, 0));
     } else if (e.key === 'Enter') {
       e.preventDefault();
-      if (results[selectedIndex]) {
-        handleLaunch(results[selectedIndex]);
+      const selectedItem = results[selectedIndex];
+      if (selectedItem) {
+        if (e.shiftKey) {
+          if (window.api && window.api.openParentFolder) {
+            window.api.openParentFolder(selectedItem.path).then(res => {
+              if (res && res.success) {
+                showToast(`Opened folder containing "${selectedItem.name}"`, 'folder');
+              } else {
+                showToast(res?.error || 'Could not open folder', 'error');
+              }
+            });
+          }
+        } else if (e.ctrlKey) {
+          if (window.api && window.api.runAsAdmin) {
+            window.api.runAsAdmin(selectedItem.path).then(res => {
+              if (res && res.success) {
+                showToast(`Launching "${selectedItem.name}" as Administrator`, 'admin');
+              } else {
+                showToast(res?.error || 'Could not run as admin', 'error');
+              }
+            });
+          }
+        } else {
+          handleLaunch(selectedItem);
+        }
+      }
+    } else if (e.ctrlKey && (e.key === 'c' || e.key === 'C')) {
+      const isTextInputFocused = document.activeElement && (document.activeElement.tagName === 'INPUT' || document.activeElement.tagName === 'TEXTAREA');
+      const hasSelection = isTextInputFocused && (document.activeElement.selectionStart !== document.activeElement.selectionEnd);
+
+      if (!hasSelection && results[selectedIndex]) {
+        e.preventDefault();
+        const selectedItem = results[selectedIndex];
+        if (window.api && window.api.copyFile) {
+          window.api.copyFile(selectedItem.path).then(res => {
+            if (res && res.success) {
+              showToast(`Copied "${selectedItem.name}" to clipboard`, 'copy');
+            } else {
+              showToast(res?.error || 'Could not copy file', 'error');
+            }
+          });
+        }
       }
     } else if (e.key === 'Escape') {
       e.preventDefault();
@@ -404,8 +613,23 @@ export default function App() {
     }
   };
 
+  const handleKeyDownRef = useRef(handleKeyDown);
+  useEffect(() => {
+    handleKeyDownRef.current = handleKeyDown;
+  });
+
+  useEffect(() => {
+    const listener = (e) => {
+      handleKeyDownRef.current(e);
+    };
+    document.addEventListener('keydown', listener);
+    return () => {
+      document.removeEventListener('keydown', listener);
+    };
+  }, []);
+
   return (
-    <div className="app-container" onKeyDown={handleKeyDown}>
+    <div className="app-container">
       {/* Search Bar */}
       <header className="search-header">
         <div className="search-icon-wrapper">
@@ -568,6 +792,71 @@ export default function App() {
                 >
                   <Copy size={14} /> Copy Answer
                 </button>
+              )}
+            </div>
+          </div>
+        ) : activeUtility === 'clip' ? (
+          /* Dedicated Clipboard UI */
+          <div className="clip-container">
+            <div className="clip-header">
+              <span>Clipboard History Monitor</span>
+              <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                <button className="btn-clear-all" onClick={handleClearClipHistory}>
+                  <Trash2 size={12} /> Clear All
+                </button>
+                <kbd>Esc to Close</kbd>
+              </div>
+            </div>
+            <div className="clip-list" ref={resultsContainerRef}>
+              {filteredClipHistory.map((item, idx) => (
+                <div 
+                  key={item.id} 
+                  className={`clip-item ${selectedIndex === idx ? 'selected' : ''}`}
+                  onClick={() => handleCopyClipItem(item)}
+                  onMouseEnter={() => setSelectedIndex(idx)}
+                >
+                  <div className="clip-icon-col">
+                    {item.type === 'image' ? <Image size={16} /> : 
+                     item.type === 'code' ? <FileCode2 size={16} /> : <FileText size={16} />}
+                  </div>
+                  <div className="clip-content-col">
+                    {item.type === 'image' ? (
+                      <div className="clip-image-preview">
+                        <img src={`file:///${item.content}`} alt="clipboard img" />
+                      </div>
+                    ) : item.type === 'code' ? (
+                      <pre className="clip-code-preview">
+                        <code>{item.content}</code>
+                      </pre>
+                    ) : (
+                      <div className="clip-text-preview">
+                        {item.content}
+                      </div>
+                    )}
+                  </div>
+                  <div className="clip-meta-col">
+                    <span className="clip-time">{formatRelativeTime(item.timestamp)}</span>
+                    <button 
+                      className="btn-item-delete" 
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleDeleteClipItem(item);
+                      }}
+                      title="Delete clip"
+                    >
+                      <Trash2 size={13} />
+                    </button>
+                  </div>
+                </div>
+              ))}
+              {filteredClipHistory.length === 0 && (
+                <div className="empty-state" style={{ padding: '60px 20px' }}>
+                  <AlertCircle size={32} className="empty-icon" />
+                  <h3 className="empty-title">No clips found</h3>
+                  <p className="empty-subtitle">
+                    Copied items will automatically appear here.
+                  </p>
+                </div>
               )}
             </div>
           </div>
@@ -735,36 +1024,66 @@ export default function App() {
         ) : (
           /* Normal Search Results List */
           <div ref={resultsContainerRef} style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-            {results.map((item, idx) => (
-              <div
-                key={item.path}
-                className={`result-item ${selectedIndex === idx ? 'selected' : ''}`}
-                onClick={() => handleLaunch(item)}
-                onMouseEnter={() => setSelectedIndex(idx)}
-              >
-                <div className="result-icon">
-                  <ResultIcon item={item} />
-                </div>
-                <div className="result-details">
-                  <div className="result-name">{item.name}</div>
-                  <div className="result-path">
-                    {item.extra ? item.extra : item.path}
+            {/* Empty state: compact utility grid */}
+            {!query && results.every(r => r.type === 'utility') ? (
+              <div className="utility-grid">
+                {results.map((item, idx) => {
+                  const IconComponent = IconMap[item.icon] || File;
+                  return (
+                    <button
+                      key={item.path}
+                      className={`utility-tile ${selectedIndex === idx ? 'selected' : ''}`}
+                      onClick={() => handleLaunch(item)}
+                      onMouseEnter={() => {
+                        if (!isKeyboardNav.current) setSelectedIndex(idx);
+                      }}
+                    >
+                      <div className="utility-tile-icon">
+                        <IconComponent size={20} />
+                      </div>
+                      <span className="utility-tile-name">{item.name}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            ) : (
+              /* Query mode: tall result list */
+              <>
+                {results.map((item, idx) => (
+                  <div
+                    key={item.path}
+                    className={`result-item ${selectedIndex === idx ? 'selected' : ''}`}
+                    onClick={() => handleLaunch(item)}
+                    onMouseMove={() => { isKeyboardNav.current = false; }}
+                    onMouseEnter={() => {
+                      if (!isKeyboardNav.current) setSelectedIndex(idx);
+                    }}
+                  >
+                    <div className="result-icon">
+                      <ResultIcon item={item} />
+                    </div>
+                    <div className="result-details">
+                      <div className="result-name">{item.name}</div>
+                      <div className="result-path">
+                        {item.extra ? item.extra : item.path}
+                      </div>
+                    </div>
+                    {item.category && (
+                      <span className="result-category">{item.category}</span>
+                    )}
                   </div>
-                </div>
-                {item.category && (
-                  <span className="result-category">{item.category}</span>
-                )}
-              </div>
-            ))}
+                ))}
 
-            {results.length === 0 && (
-              <div className="empty-state">
-                <AlertCircle size={40} className="empty-icon" />
-                <h3 className="empty-title">No items found</h3>
-                <p className="empty-subtitle">
-                  We couldn't find matches for "{query}". Try checking your spelling or typing a system command.
-                </p>
-              </div>
+                {results.length === 0 && (
+                  <div className="empty-state">
+                    <AlertCircle size={40} className="empty-icon" />
+                    <h3 className="empty-title">No items found</h3>
+                    <p className="empty-subtitle">
+                      We couldn't find matches for "{query}". Try checking your spelling or typing a system command.
+                    </p>
+                  </div>
+                )}
+              </>
             )}
           </div>
         )}
@@ -787,13 +1106,29 @@ export default function App() {
             <kbd>↑↓</kbd> <span>Navigate</span>
           </div>
           <div className="hint-item">
-            <kbd>Enter</kbd> <span>Launch</span>
+            <kbd>↵</kbd> <span>Launch</span>
           </div>
           <div className="hint-item">
-            <kbd>Alt+Space</kbd> <span>Hide</span>
+            <kbd>Shift+↵</kbd> <span>Folder</span>
+          </div>
+          <div className="hint-item">
+            <kbd>Ctrl+↵</kbd> <span>Admin</span>
+          </div>
+          <div className="hint-item">
+            <kbd>Ctrl+C</kbd> <span>Copy</span>
           </div>
         </div>
       </footer>
+
+      {toast && (
+        <div className={`toast-notification toast-${toast.type}`}>
+          <div className="toast-shimmer" />
+          <div className="toast-icon-wrapper">
+            <ToastIcon type={toast.type} />
+          </div>
+          <span className="toast-message">{toast.message}</span>
+        </div>
+      )}
     </div>
   );
 }

@@ -1,4 +1,4 @@
-const { app, BrowserWindow, globalShortcut, ipcMain, shell, Tray, Menu } = require('electron');
+const { app, BrowserWindow, globalShortcut, ipcMain, shell, Tray, Menu, clipboard } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
@@ -36,9 +36,218 @@ const DEFAULT_UTILITIES = [
   { name: 'Calculator', path: 'utility://calculator', type: 'utility', category: 'System', icon: 'Calculator' },
   { name: 'System Stats', path: 'utility://stats', type: 'utility', category: 'System', icon: 'Activity' },
   { name: 'Quick Notes', path: 'utility://notes', type: 'utility', category: 'System', icon: 'FileText' },
+  { name: 'Clipboard History', path: 'utility://clip', type: 'utility', category: 'System', icon: 'Clipboard' },
   { name: 'Run Command', path: 'utility://terminal', type: 'utility', category: 'System', icon: 'Terminal' },
   { name: 'Settings', path: 'utility://settings', type: 'utility', category: 'System', icon: 'Settings' }
 ];
+
+let clipboardHistory = [];
+let CLIPBOARD_HISTORY_FILE;
+let CLIP_IMAGES_DIR;
+
+function ensureDirectories() {
+  if (!fs.existsSync(CLIP_IMAGES_DIR)) {
+    fs.mkdirSync(CLIP_IMAGES_DIR, { recursive: true });
+  }
+}
+
+function loadClipboardHistory() {
+  try {
+    if (fs.existsSync(CLIPBOARD_HISTORY_FILE)) {
+      const data = fs.readFileSync(CLIPBOARD_HISTORY_FILE, 'utf8');
+      clipboardHistory = JSON.parse(data);
+    }
+  } catch (err) {
+    console.error('Error loading clipboard history:', err);
+  }
+}
+
+function saveClipboardHistory() {
+  try {
+    fs.writeFileSync(CLIPBOARD_HISTORY_FILE, JSON.stringify(clipboardHistory, null, 2), 'utf8');
+  } catch (err) {
+    console.error('Error saving clipboard history:', err);
+  }
+}
+
+function enforceHistoryLimit() {
+  if (clipboardHistory.length > 50) {
+    const removedItems = clipboardHistory.slice(50);
+    clipboardHistory = clipboardHistory.slice(0, 50);
+    
+    // Clean up files for shifted images
+    for (const item of removedItems) {
+      if (item.type === 'image' && fs.existsSync(item.content)) {
+        try {
+          fs.unlinkSync(item.content);
+        } catch (err) {
+          console.error('Error deleting old image file:', err);
+        }
+      }
+    }
+  }
+}
+
+function addTextToHistory(text) {
+  // Deduplicate
+  clipboardHistory = clipboardHistory.filter(item => {
+    if (item.type === 'text' || item.type === 'code') {
+      return item.content !== text;
+    }
+    return true;
+  });
+
+  const id = Date.now().toString() + Math.random().toString(36).substr(2, 5);
+  
+  // Code snippet detection
+  const lines = text.split('\n');
+  const hasMultipleLines = lines.length > 1;
+  const isCode = hasMultipleLines && (
+    (text.includes('{') && text.includes('}')) ||
+    text.includes('const ') ||
+    text.includes('function ') ||
+    (text.includes('import ') && text.includes('from ')) ||
+    text.includes('class ') ||
+    text.includes('<html>') ||
+    text.includes('&&') ||
+    text.includes('||') ||
+    lines.some(line => line.startsWith('  ') || line.startsWith('\t'))
+  );
+
+  const item = {
+    id,
+    type: isCode ? 'code' : 'text',
+    content: text,
+    timestamp: Date.now()
+  };
+
+  clipboardHistory.unshift(item);
+  enforceHistoryLimit();
+  saveClipboardHistory();
+}
+
+function addImageToHistory(img) {
+  const id = Date.now().toString() + Math.random().toString(36).substr(2, 5);
+  const imgPath = path.join(CLIP_IMAGES_DIR, `${id}.png`);
+  
+  try {
+    const buffer = img.toPNG();
+    fs.writeFileSync(imgPath, buffer);
+    
+    const item = {
+      id,
+      type: 'image',
+      content: imgPath,
+      timestamp: Date.now()
+    };
+
+    clipboardHistory.unshift(item);
+    enforceHistoryLimit();
+    saveClipboardHistory();
+  } catch (err) {
+    console.error('Error saving clipboard image to disk:', err);
+  }
+}
+
+let lastText = '';
+let lastImageHash = '';
+
+function checkClipboard() {
+  try {
+    const text = clipboard.readText();
+    if (text && text.trim() !== '') {
+      if (text !== lastText) {
+        lastText = text;
+        addTextToHistory(text);
+        return;
+      }
+    } else {
+      lastText = '';
+    }
+
+    const img = clipboard.readImage();
+    if (!img.isEmpty()) {
+      const size = img.getSize();
+      const hash = `${size.width}x${size.height}`;
+      if (hash !== lastImageHash) {
+        lastImageHash = hash;
+        addImageToHistory(img);
+      }
+    } else {
+      lastImageHash = '';
+    }
+  } catch (err) {
+    console.error('Error polling clipboard:', err);
+  }
+}
+
+function startClipboardMonitor() {
+  // Initialize paths here, after app is ready
+  CLIPBOARD_HISTORY_FILE = path.join(app.getPath('userData'), 'clipboard_history.json');
+  CLIP_IMAGES_DIR = path.join(app.getPath('userData'), 'clip_images');
+
+  ensureDirectories();
+  loadClipboardHistory();
+  
+  try {
+    lastText = clipboard.readText();
+    const img = clipboard.readImage();
+    if (!img.isEmpty()) {
+      const size = img.getSize();
+      lastImageHash = `${size.width}x${size.height}`;
+    }
+  } catch (e) {}
+
+  setInterval(checkClipboard, 1000);
+}
+
+function writeToSystemClipboard(content, type) {
+  try {
+    if (type === 'image') {
+      if (fs.existsSync(content)) {
+        const { nativeImage } = require('electron');
+        const img = nativeImage.createFromPath(content);
+        clipboard.writeImage(img);
+        const size = img.getSize();
+        lastImageHash = `${size.width}x${size.height}`;
+      }
+    } else {
+      clipboard.writeText(content);
+      lastText = content;
+    }
+    return true;
+  } catch (err) {
+    console.error('Error writing to clipboard:', err);
+    return false;
+  }
+}
+
+function deleteClipboardItem(id) {
+  const item = clipboardHistory.find(i => i.id === id);
+  if (item && item.type === 'image' && fs.existsSync(item.content)) {
+    try {
+      fs.unlinkSync(item.content);
+    } catch (err) {
+      console.error('Error deleting image file:', err);
+    }
+  }
+  clipboardHistory = clipboardHistory.filter(i => i.id !== id);
+  saveClipboardHistory();
+}
+
+function clearClipboardHistory() {
+  for (const item of clipboardHistory) {
+    if (item.type === 'image' && fs.existsSync(item.content)) {
+      try {
+        fs.unlinkSync(item.content);
+      } catch (err) {
+        console.error('Error deleting image file on clear:', err);
+      }
+    }
+  }
+  clipboardHistory = [];
+  saveClipboardHistory();
+}
 
 let searchIndex = [...DEFAULT_UTILITIES];
 let isIndexing = false;
@@ -562,6 +771,122 @@ ipcMain.handle('launch', async (event, { filePath, type }) => {
   }
 });
 
+ipcMain.handle('open-parent-folder', async (event, filePath) => {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.hide();
+  }
+
+  if (!filePath || filePath.startsWith('utility://') || filePath.startsWith('calc://') || filePath.startsWith('command://') || filePath.startsWith('http://') || filePath.startsWith('https://')) {
+    return { success: false, error: 'Not a local file' };
+  }
+
+  try {
+    if (!fs.existsSync(filePath)) {
+      return { success: false, error: 'File does not exist' };
+    }
+    shell.showItemInFolder(filePath);
+    return { success: true };
+  } catch (err) {
+    console.error('Error opening parent folder:', err);
+    return { success: false, error: err.message };
+  }
+});
+
+ipcMain.handle('run-as-admin', async (event, filePath) => {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.hide();
+  }
+
+  if (!filePath || filePath.startsWith('utility://') || filePath.startsWith('calc://') || filePath.startsWith('command://') || filePath.startsWith('http://') || filePath.startsWith('https://')) {
+    return { success: false, error: 'Not an executable file' };
+  }
+
+  try {
+    if (!fs.existsSync(filePath)) {
+      return { success: false, error: 'File does not exist' };
+    }
+
+    let targetPath = filePath;
+    if (filePath.toLowerCase().endsWith('.lnk')) {
+      try {
+        const shortcut = shell.readShortcutLink(filePath);
+        if (shortcut && shortcut.target && fs.existsSync(shortcut.target)) {
+          targetPath = shortcut.target;
+        }
+      } catch (e) {
+        // Fallback to original shortcut path
+      }
+    }
+
+    // Spawn PowerShell to run the process as administrator (UAC popup)
+    const escapedPath = targetPath.replace(/'/g, "''");
+    const { spawn } = require('child_process');
+    spawn('powershell.exe', [
+      '-NoProfile',
+      '-Command',
+      `Start-Process -FilePath '${escapedPath}' -Verb RunAs`
+    ]);
+
+    return { success: true };
+  } catch (err) {
+    console.error('Error running as admin:', err);
+    return { success: false, error: err.message };
+  }
+});
+
+ipcMain.handle('copy-file', async (event, filePath) => {
+  if (!filePath || filePath.startsWith('utility://') || filePath.startsWith('calc://') || filePath.startsWith('command://') || filePath.startsWith('http://') || filePath.startsWith('https://')) {
+    return { success: false, error: 'Not a copyable file' };
+  }
+
+  try {
+    if (!fs.existsSync(filePath)) {
+      return { success: false, error: 'File does not exist' };
+    }
+
+    const { clipboard } = require('electron');
+    // Copy path as text
+    clipboard.writeText(filePath);
+
+    // On Windows, use PowerShell to copy file to clipboard as file object (CF_HDROP)
+    if (process.platform === 'win32') {
+      const escapedPath = filePath.replace(/'/g, "''");
+      const { spawn } = require('child_process');
+      const psScript = `
+        Add-Type -AssemblyName System.Windows.Forms
+        $files = New-Object System.Collections.Specialized.StringCollection
+        $files.Add('${escapedPath}') | Out-Null
+        [System.Windows.Forms.Clipboard]::SetFileDropList($files)
+      `;
+      spawn('powershell.exe', ['-NoProfile', '-Command', psScript]);
+    }
+
+    return { success: true };
+  } catch (err) {
+    console.error('Error copying file:', err);
+    return { success: false, error: err.message };
+  }
+});
+
+ipcMain.handle('get-clipboard-history', () => {
+  return clipboardHistory;
+});
+
+ipcMain.handle('write-to-clipboard', (event, { content, type }) => {
+  return writeToSystemClipboard(content, type);
+});
+
+ipcMain.handle('clear-clipboard-history', () => {
+  clearClipboardHistory();
+  return true;
+});
+
+ipcMain.handle('delete-clipboard-item', (event, id) => {
+  deleteClipboardItem(id);
+  return true;
+});
+
+
 // Native Icon Extraction
 ipcMain.handle('get-file-icon', async (event, filePath) => {
   try {
@@ -679,6 +1004,7 @@ app.whenReady().then(() => {
   updateGlobalShortcut();
 
   setTimeout(startIndexing, 1000);
+  startClipboardMonitor();
 
   // Trigger auto-update check on startup
   autoUpdater.checkForUpdatesAndNotify();
