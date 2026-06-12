@@ -125,6 +125,7 @@ export default function App() {
   });
   const [newFolderInput, setNewFolderInput] = useState('');
   const [appVersion, setAppVersion] = useState('1.0.0');
+  const [updateInfo, setUpdateInfo] = useState(null);
 
   // Calculator states
   const [calcExpression, setCalcExpression] = useState('');
@@ -162,7 +163,7 @@ export default function App() {
     document.documentElement.style.setProperty('--app-opacity', (settings.opacity ?? 85) / 100);
   }, [settings.theme, settings.opacity, settings.isLightMode]);
 
-  // Listen for indexer status from Electron main process
+  // Listen for indexer status and auto-updates from Electron main process
   useEffect(() => {
     const fetchInitialIndex = async () => {
       if (window.api && window.api.getIndexStatus) {
@@ -175,6 +176,12 @@ export default function App() {
     if (window.api && window.api.onIndexStatus) {
       window.api.onIndexStatus((status) => {
         setIndexStatus(status);
+      });
+    }
+
+    if (window.api && window.api.onUpdateDownloaded) {
+      window.api.onUpdateDownloaded((info) => {
+        setUpdateInfo(info);
       });
     }
   }, []);
@@ -428,6 +435,24 @@ export default function App() {
 
       {/* Main Content Pane */}
       <main className="content-area">
+        {updateInfo && (
+          <div className="update-banner">
+            <div className="update-banner-content">
+              <Sparkles className="update-banner-icon animate-pulse-slow" size={16} />
+              <span className="update-banner-text">
+                Version <strong>v{updateInfo.version}</strong> is ready to install.
+              </span>
+            </div>
+            <div className="update-banner-actions">
+              <button className="btn-update-restart" onClick={() => window.api.restartAndInstall()}>
+                Restart Now
+              </button>
+              <button className="btn-update-later" onClick={() => setUpdateInfo(null)}>
+                Later
+              </button>
+            </div>
+          </div>
+        )}
         {activeUtility === 'notes' ? (
           <div className="notes-container">
             <div className="notes-header">

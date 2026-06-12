@@ -24,6 +24,9 @@ autoUpdater.on('download-progress', (progressObj) => {
 });
 autoUpdater.on('update-downloaded', (info) => {
   console.log('Auto-updater: Update downloaded, will install on restart.');
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('update-downloaded', info);
+  }
 });
 
 
@@ -468,6 +471,11 @@ ipcMain.handle('get-index-status', () => {
 // App Version Handler
 ipcMain.handle('get-app-version', () => {
   return app.getVersion();
+});
+
+// Restart and Install Handler
+ipcMain.handle('restart-and-install', () => {
+  autoUpdater.quitAndInstall();
 });
 
 // System Stats
