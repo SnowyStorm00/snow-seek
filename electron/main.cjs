@@ -61,6 +61,7 @@ let currentSettings = {
   theme: 'indigo',
   opacity: 85,
   isLightMode: false,
+  searchEngine: 'google',
   customFolders: []
 };
 
@@ -309,6 +310,33 @@ async function crawlDirectory(currentDir, currentDepth, maxDepth, category) {
   }
 }
 
+const SEARCH_ENGINE_MAP = {
+  google: {
+    name: 'Google',
+    url: 'https://www.google.com/search?q={query}',
+    base: 'https://www.google.com'
+  },
+  duckduckgo: {
+    name: 'DuckDuckGo',
+    url: 'https://duckduckgo.com/?q={query}',
+    base: 'https://duckduckgo.com'
+  },
+  bing: {
+    name: 'Bing',
+    url: 'https://www.bing.com/search?q={query}',
+    base: 'https://www.bing.com'
+  },
+  yahoo: {
+    name: 'Yahoo',
+    url: 'https://search.yahoo.com/search?p={query}',
+    base: 'https://search.yahoo.com'
+  }
+};
+
+function getSearchEngineData(key) {
+  return SEARCH_ENGINE_MAP[key] || SEARCH_ENGINE_MAP.google;
+}
+
 // IPC Handlers
 ipcMain.handle('search', async (event, query) => {
   if (!query) {
@@ -316,6 +344,30 @@ ipcMain.handle('search', async (event, query) => {
   }
 
   const cleanQuery = query.toLowerCase().trim();
+  const engineKey = currentSettings.searchEngine || 'google';
+  const engine = getSearchEngineData(engineKey);
+
+  // Web search shortcut prefix modes
+  if (cleanQuery.startsWith('@ ') || cleanQuery.startsWith('@')) {
+    const searchTerm = query.replace(/^@\s*/, '');
+    if (searchTerm.trim() !== '') {
+      return [{
+        name: `Search ${engine.name} for "${searchTerm}"`,
+        path: engine.url.replace('{query}', encodeURIComponent(searchTerm)),
+        type: 'web',
+        category: 'Web Search',
+        icon: 'Globe'
+      }];
+    } else {
+      return [{
+        name: `Search Web using ${engine.name}...`,
+        path: engine.base,
+        type: 'web',
+        category: 'Web Search',
+        icon: 'Globe'
+      }];
+    }
+  }
 
   // Run Command mode
   if (cleanQuery.startsWith('>')) {
@@ -347,6 +399,69 @@ ipcMain.handle('search', async (event, query) => {
     } catch (e) {
       // Ignore
     }
+  }
+
+  // Web search prefix modes
+  if (cleanQuery.startsWith('/g ') || cleanQuery.startsWith('/google ')) {
+    const searchTerm = query.replace(/^\/(g|google)\s+/, '');
+    return [{
+      name: `Search Google for "${searchTerm}"`,
+      path: `https://www.google.com/search?q=${encodeURIComponent(searchTerm)}`,
+      type: 'web',
+      category: 'Web Search',
+      icon: 'Globe'
+    }];
+  }
+
+  if (cleanQuery.startsWith('/w ') || cleanQuery.startsWith('/wiki ') || cleanQuery.startsWith('/wikipedia ')) {
+    const searchTerm = query.replace(/^\/(w|wiki|wikipedia)\s+/, '');
+    return [{
+      name: `Search Wikipedia for "${searchTerm}"`,
+      path: `https://en.wikipedia.org/wiki/Special:Search?search=${encodeURIComponent(searchTerm)}`,
+      type: 'web',
+      category: 'Wikipedia Search',
+      icon: 'Globe'
+    }];
+  }
+
+  if (cleanQuery.startsWith('/yt ') || cleanQuery.startsWith('/youtube ')) {
+    const searchTerm = query.replace(/^\/(yt|youtube)\s+/, '');
+    return [{
+      name: `Search YouTube for "${searchTerm}"`,
+      path: `https://www.youtube.com/results?search_query=${encodeURIComponent(searchTerm)}`,
+      type: 'web',
+      category: 'YouTube Search',
+      icon: 'Globe'
+    }];
+  }
+
+  // Exact shortcut help fallbacks
+  if (cleanQuery === '/g' || cleanQuery === '/google') {
+    return [{
+      name: 'Search Google...',
+      path: 'https://www.google.com',
+      type: 'web',
+      category: 'Web Search',
+      icon: 'Globe'
+    }];
+  }
+  if (cleanQuery === '/w' || cleanQuery === '/wiki' || cleanQuery === '/wikipedia') {
+    return [{
+      name: 'Search Wikipedia...',
+      path: 'https://en.wikipedia.org',
+      type: 'web',
+      category: 'Wikipedia Search',
+      icon: 'Globe'
+    }];
+  }
+  if (cleanQuery === '/yt' || cleanQuery === '/youtube') {
+    return [{
+      name: 'Search YouTube...',
+      path: 'https://www.youtube.com',
+      type: 'web',
+      category: 'YouTube Search',
+      icon: 'Globe'
+    }];
   }
 
   // Fuzzy search
@@ -381,14 +496,25 @@ ipcMain.handle('search', async (event, query) => {
     }
   }
 
-  return results
+  const sortedResults = results
     .sort((a, b) => {
       if (b.score !== a.score) return b.score - a.score;
       if (a.type === 'app' && b.type !== 'app') return -1;
       if (b.type === 'app' && a.type !== 'app') return 1;
       return a.name.localeCompare(b.name);
-    })
-    .slice(0, currentSettings.resultsLimit || 10);
+    });
+
+  const limit = currentSettings.resultsLimit || 10;
+  const finalResults = sortedResults.slice(0, limit - 1);
+  finalResults.push({
+    name: `Search ${engine.name} for "${query}"`,
+    path: engine.url.replace('{query}', encodeURIComponent(query)),
+    type: 'web',
+    category: 'Web Search',
+    icon: 'Globe'
+  });
+
+  return finalResults;
 });
 
 ipcMain.handle('launch', async (event, { filePath, type }) => {
@@ -411,6 +537,16 @@ ipcMain.handle('launch', async (event, { filePath, type }) => {
 
   if (type === 'utility') {
     return { success: true, utility: filePath };
+  }
+
+  if (type === 'web') {
+    try {
+      await shell.openExternal(filePath);
+      return { success: true };
+    } catch (err) {
+      console.error('Web launch error:', err);
+      return { success: false, error: err.message };
+    }
   }
 
   try {

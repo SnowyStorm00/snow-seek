@@ -4,13 +4,13 @@ import {
   Calculator, Activity, FileText, FileCode2, Image, 
   Music, Video, BookOpen, AlertCircle, Play, ChevronRight,
   Settings, X, Plus, Trash2, Copy, ArrowLeft, RotateCcw,
-  Sun, Moon, ChevronDown
+  Sun, Moon, ChevronDown, Globe
 } from 'lucide-react';
 
 const IconMap = {
   Search, Sparkles, Cpu, File, Folder, Terminal, 
   Calculator, Activity, FileText, FileCode: FileCode2, 
-  Image, Music, Video, BookOpen, Settings
+  Image, Music, Video, BookOpen, Settings, Globe
 };
 
 // ResultIcon component queries native shell icons asynchronously or displays local thumbnails
@@ -121,6 +121,7 @@ export default function App() {
     theme: 'indigo',
     opacity: 85,
     isLightMode: false,
+    searchEngine: 'google',
     customFolders: []
   });
   const [newFolderInput, setNewFolderInput] = useState('');
@@ -660,7 +661,7 @@ export default function App() {
                 />
               </div>
               
-              <div className="settings-row">
+              <div className="settings-row" style={{ marginBottom: '12px' }}>
                 <div className="settings-label">
                   <span className="settings-name">Search Results Limit</span>
                   <span className="settings-description">Maximum number of results to display in the dropdown.</span>
@@ -674,6 +675,23 @@ export default function App() {
                     { value: '20', label: '20 Results' }
                   ]}
                   onChange={(val) => handleSaveSettings({ ...settings, resultsLimit: parseInt(val) })}
+                />
+              </div>
+
+              <div className="settings-row">
+                <div className="settings-label">
+                  <span className="settings-name">Default Search Engine</span>
+                  <span className="settings-description">Preferred search engine for shortcuts and general web queries.</span>
+                </div>
+                <CustomSelect
+                  value={settings.searchEngine || 'google'}
+                  options={[
+                    { value: 'google', label: 'Google' },
+                    { value: 'duckduckgo', label: 'DuckDuckGo' },
+                    { value: 'bing', label: 'Bing' },
+                    { value: 'yahoo', label: 'Yahoo' }
+                  ]}
+                  onChange={(val) => handleSaveSettings({ ...settings, searchEngine: val })}
                 />
               </div>
             </div>

@@ -1,7 +1,7 @@
 {
   "name": "snowseek",
   "private": true,
-  "version": "1.0.2",
+  "version": "1.0.3",
   "description": "Premium glassmorphic launcher app",
   "author": "SnowSeek Dev",
   "main": "electron/main.cjs",
