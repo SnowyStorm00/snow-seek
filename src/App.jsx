@@ -124,6 +124,7 @@ export default function App() {
     customFolders: []
   });
   const [newFolderInput, setNewFolderInput] = useState('');
+  const [appVersion, setAppVersion] = useState('1.0.0');
 
   // Calculator states
   const [calcExpression, setCalcExpression] = useState('');
@@ -142,6 +143,10 @@ export default function App() {
         const lightClass = loadedSettings.isLightMode ? 'theme-light' : '';
         document.documentElement.className = `theme-${loadedSettings.theme} ${lightClass}`.trim();
         document.documentElement.style.setProperty('--app-opacity', (loadedSettings.opacity ?? 85) / 100);
+      }
+      if (window.api && window.api.getAppVersion) {
+        const ver = await window.api.getAppVersion();
+        setAppVersion(ver);
       }
     };
     loadApp();
@@ -544,7 +549,10 @@ export default function App() {
           /* Settings UI */
           <div className="settings-container">
             <div className="settings-header">
-              <span className="settings-title">Launch settings</span>
+              <span className="settings-title">
+                Launch settings
+                <span style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 'normal', marginLeft: '8px', opacity: 0.8 }}>v{appVersion}</span>
+              </span>
               <kbd>Esc to Close</kbd>
             </div>
             

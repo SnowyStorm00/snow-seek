@@ -465,6 +465,11 @@ ipcMain.handle('get-index-status', () => {
   return { status: isIndexing ? 'indexing' : 'ready', count: searchIndex.length };
 });
 
+// App Version Handler
+ipcMain.handle('get-app-version', () => {
+  return app.getVersion();
+});
+
 // System Stats
 ipcMain.handle('get-system-stats', async () => {
   const totalMem = os.totalmem();

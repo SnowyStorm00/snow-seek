@@ -11,5 +11,6 @@ contextBridge.exposeInMainWorld('api', {
   saveSettings: (settings) => ipcRenderer.invoke('save-settings', settings),
   hideWindow: () => ipcRenderer.send('hide-window'),
   getIndexStatus: () => ipcRenderer.invoke('get-index-status'),
+  getAppVersion: () => ipcRenderer.invoke('get-app-version'),
   onIndexStatus: (callback) => ipcRenderer.on('index-status', (event, status) => callback(status))
 });
